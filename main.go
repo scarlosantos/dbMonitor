@@ -14,23 +14,18 @@ import (
 )
 
 func main() {
-	// Carregar configuração
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		log.Fatalf("Erro ao carregar configuração: %v", err)
 	}
 
-	// Inicializar notificador de email
 	emailNotifier := notifier.NewEmailNotifier(cfg.Email)
 
-	// Inicializar monitor
 	dbMonitor := monitor.NewDatabaseMonitor(cfg, emailNotifier)
 
-	// Configurar context para cancelamento graceful
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Capturar sinais do sistema
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -40,13 +35,11 @@ func main() {
 		cancel()
 	}()
 
-	// Iniciar monitoramento
 	log.Println("Iniciando monitoramento de banco de dados...")
 
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	// Primeira execução imediata
 	dbMonitor.CheckAllInstances(ctx)
 
 	for {
