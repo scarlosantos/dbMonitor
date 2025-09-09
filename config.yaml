@@ -1,0 +1,75 @@
+# config.yaml - Exemplo de configuração
+databases:
+  # Configuração MySQL com SSL
+  - name: "mysql_producao"
+    type: "mysql"
+    host: "mysql-prod.exemplo.com"
+    port: 3306
+    database: "production"
+    username: "monitor_user"
+    password: "senha_segura_mysql"
+    ssl_mode: "REQUIRED"
+    cert_path: "certs/mysql_producao"
+
+  # Configuração MySQL sem SSL (para desenvolvimento)
+  - name: "mysql_desenvolvimento"
+    type: "mysql"
+    host: "localhost"
+    port: 3306
+    database: "dev"
+    username: "root"
+    password: "root123"
+    ssl_mode: "DISABLED"
+    cert_path: ""
+
+  # Configuração PostgreSQL com SSL
+  - name: "postgres_producao"
+    type: "postgresql"
+    host: "postgres-prod.exemplo.com"
+    port: 5432
+    database: "production"
+    username: "monitor_user"
+    password: "senha_segura_postgres"
+    ssl_mode: "require"
+    cert_path: "certs/postgres_producao"
+
+  # Configuração PostgreSQL sem SSL
+  - name: "postgres_desenvolvimento"
+    type: "postgresql"
+    host: "localhost"
+    port: 5432
+    database: "dev"
+    username: "postgres"
+    password: "postgres123"
+    ssl_mode: "disable"
+    cert_path: ""
+
+  # Configuração PostgreSQL com SSL verify-full
+  - name: "postgres_critico"
+    type: "postgresql"
+    host: "postgres-critical.exemplo.com"
+    port: 5432
+    database: "critical"
+    username: "monitor_user"
+    password: "senha_muito_segura"
+    ssl_mode: "verify-full"
+    cert_path: "certs/postgres_critico"
+
+# Configuração de email
+email:
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  username: "monitor@exemplo.com"
+  password: "senha_aplicacao_gmail"  # Use App Password para Gmail
+  from_email: "monitor@exemplo.com"
+  to_emails:
+    - "admin@exemplo.com"
+    - "dba@exemplo.com"
+    - "suporte@exemplo.com"
+  use_tls: true
+
+# Configuração de thresholds para alertas
+thresholds:
+  active_connections: 80      # Alerta se conexões ativas > 80
+  inactive_connections: 100   # Alerta se conexões inativas > 100
+  total_connections: 150      # Alerta se total de conexões > 150
