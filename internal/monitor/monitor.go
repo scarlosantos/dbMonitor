@@ -14,10 +14,11 @@ import (
 
 type DatabaseMonitor struct {
 	config      *config.Config
-	connections map[string]*database.Connection
+	pool        *database.Pool
 	notifier    notifier.Notifier
 	mu          sync.RWMutex
 	lastStats   map[string]*database.SessionStats
+	alertCounts map[string]int
 }
 
 type Alert struct {
@@ -30,179 +31,210 @@ type Alert struct {
 }
 
 func NewDatabaseMonitor(cfg *config.Config, notifier notifier.Notifier) *DatabaseMonitor {
-	return &DatabaseMonitor{
+	pool := database.NewPool()
+
+	monitor := &DatabaseMonitor{
 		config:      cfg,
-		connections: make(map[string]*database.Connection),
+		pool:        pool,
 		notifier:    notifier,
 		lastStats:   make(map[string]*database.SessionStats),
+		alertCounts: make(map[string]int),
 	}
+
+	// Start health check routine for connection pool
+	go pool.StartHealthCheckRoutine(context.Background())
+
+	return monitor
 }
 
-func (dm *DatabaseMonitor) CheckAllInstances(ctx context.Context) {
+func (dm *DatabaseMonitor) CheckAllInstances(ctx context.Context) error {
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errors []error
 
 	for _, dbConfig := range dm.config.Databases {
 		wg.Add(1)
 		go func(cfg config.DatabaseConfig) {
 			defer wg.Done()
-			dm.checkInstance(ctx, cfg)
+
+			if err := dm.checkInstance(ctx, cfg); err != nil {
+				mu.Lock()
+				errors = append(errors, fmt.Errorf("failed to check %s: %w", cfg.Name, err))
+				mu.Unlock()
+			}
 		}(dbConfig)
 	}
 
 	wg.Wait()
+
+	if len(errors) > 0 {
+		log.Printf("Encountered %d errors during instance checks", len(errors))
+		for _, err := range errors {
+			log.Printf("Instance check error: %v", err)
+		}
+		return fmt.Errorf("encountered %d errors during monitoring", len(errors))
+	}
+
+	return nil
 }
 
-func (dm *DatabaseMonitor) checkInstance(ctx context.Context, cfg config.DatabaseConfig) {
-	// Obter ou criar conexão
-	conn, err := dm.getConnection(cfg)
+func (dm *DatabaseMonitor) checkInstance(ctx context.Context, cfg config.DatabaseConfig) error {
+	// Get connection from pool
+	conn, err := dm.pool.GetConnection(cfg)
 	if err != nil {
-		log.Printf("Erro ao conectar com %s: %v", cfg.Name, err)
+		log.Printf("Failed to get connection for %s: %v", cfg.Name, err)
 		dm.sendAlert(Alert{
 			DatabaseName: cfg.Name,
 			AlertType:    "CONNECTION_ERROR",
-			Message:      fmt.Sprintf("Falha na conexão: %v", err),
+			Message:      fmt.Sprintf("Failed to establish connection: %v", err),
 			Timestamp:    time.Now(),
 		})
-		return
+		return err
 	}
 
-	// Obter estatísticas
-	stats, err := conn.GetSessionStats(ctx)
+	// Create timeout context for stats collection
+	statsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	// Get session statistics
+	stats, err := conn.GetSessionStats(statsCtx)
 	if err != nil {
-		log.Printf("Erro ao obter estatísticas de %s: %v", cfg.Name, err)
+		log.Printf("Failed to get statistics for %s: %v", cfg.Name, err)
 		dm.sendAlert(Alert{
 			DatabaseName: cfg.Name,
 			AlertType:    "QUERY_ERROR",
-			Message:      fmt.Sprintf("Erro ao consultar estatísticas: %v", err),
+			Message:      fmt.Sprintf("Failed to query statistics: %v", err),
 			Timestamp:    time.Now(),
 		})
-		return
+		return err
 	}
 
-	stats.Timestamp = time.Now().Format("2006-01-02 15:04:05")
-
-	// Armazenar estatísticas atuais
+	// Store current statistics
 	dm.mu.Lock()
 	dm.lastStats[cfg.Name] = stats
 	dm.mu.Unlock()
 
-	log.Printf("DB: %s | Total: %d | Ativo: %d | Inativo: %d | Idle: %d | Esperando: %d",
+	log.Printf("DB: %s | Total: %d | Active: %d | Inactive: %d | Idle: %d | Waiting: %d",
 		stats.DatabaseName, stats.Total, stats.Active, stats.Inactive, stats.Idle, stats.Waiting)
 
-	// Verificar thresholds e enviar alertas se necessário
+	// Check thresholds and send alerts if necessary
 	dm.checkThresholds(stats)
-}
 
-func (dm *DatabaseMonitor) getConnection(cfg config.DatabaseConfig) (*database.Connection, error) {
-	dm.mu.RLock()
-	if conn, exists := dm.connections[cfg.Name]; exists {
-		dm.mu.RUnlock()
-
-		// Testar se a conexão ainda está válida
-		if err := conn.db.Ping(); err == nil {
-			return conn, nil
-		}
-
-		// Conexão inválida, remover e recriar
-		dm.mu.Lock()
-		conn.Close()
-		delete(dm.connections, cfg.Name)
-		dm.mu.Unlock()
-	} else {
-		dm.mu.RUnlock()
-	}
-
-	// Criar nova conexão
-	conn, err := database.NewConnection(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	dm.mu.Lock()
-	dm.connections[cfg.Name] = conn
-	dm.mu.Unlock()
-
-	return conn, nil
+	return nil
 }
 
 func (dm *DatabaseMonitor) checkThresholds(stats *database.SessionStats) {
 	thresholds := dm.config.Thresholds
+	alertKey := stats.DatabaseName
 
-	// Verificar conexões ativas
+	// Check active connections
 	if stats.Active > thresholds.ActiveConnections {
-		dm.sendAlert(Alert{
-			DatabaseName: stats.DatabaseName,
-			AlertType:    "HIGH_ACTIVE_CONNECTIONS",
-			Message:      fmt.Sprintf("Muitas conexões ativas detectadas"),
-			Value:        stats.Active,
-			Threshold:    thresholds.ActiveConnections,
-			Timestamp:    time.Now(),
-		})
+		if dm.shouldSendAlert(alertKey, "HIGH_ACTIVE_CONNECTIONS") {
+			dm.sendAlert(Alert{
+				DatabaseName: stats.DatabaseName,
+				AlertType:    "HIGH_ACTIVE_CONNECTIONS",
+				Message:      "High number of active connections detected",
+				Value:        stats.Active,
+				Threshold:    thresholds.ActiveConnections,
+				Timestamp:    time.Now(),
+			})
+		}
 	}
 
-	// Verificar conexões inativas
+	// Check inactive connections
 	if stats.Inactive > thresholds.InactiveConnections {
-		dm.sendAlert(Alert{
-			DatabaseName: stats.DatabaseName,
-			AlertType:    "HIGH_INACTIVE_CONNECTIONS",
-			Message:      fmt.Sprintf("Muitas conexões inativas detectadas"),
-			Value:        stats.Inactive,
-			Threshold:    thresholds.InactiveConnections,
-			Timestamp:    time.Now(),
-		})
+		if dm.shouldSendAlert(alertKey, "HIGH_INACTIVE_CONNECTIONS") {
+			dm.sendAlert(Alert{
+				DatabaseName: stats.DatabaseName,
+				AlertType:    "HIGH_INACTIVE_CONNECTIONS",
+				Message:      "High number of inactive connections detected",
+				Value:        stats.Inactive,
+				Threshold:    thresholds.InactiveConnections,
+				Timestamp:    time.Now(),
+			})
+		}
 	}
 
-	// Verificar total de conexões
+	// Check total connections
 	if stats.Total > thresholds.TotalConnections {
-		dm.sendAlert(Alert{
-			DatabaseName: stats.DatabaseName,
-			AlertType:    "HIGH_TOTAL_CONNECTIONS",
-			Message:      fmt.Sprintf("Muitas conexões totais detectadas"),
-			Value:        stats.Total,
-			Threshold:    thresholds.TotalConnections,
-			Timestamp:    time.Now(),
-		})
+		if dm.shouldSendAlert(alertKey, "HIGH_TOTAL_CONNECTIONS") {
+			dm.sendAlert(Alert{
+				DatabaseName: stats.DatabaseName,
+				AlertType:    "HIGH_TOTAL_CONNECTIONS",
+				Message:      "High total number of connections detected",
+				Value:        stats.Total,
+				Threshold:    thresholds.TotalConnections,
+				Timestamp:    time.Now(),
+			})
+		}
 	}
 }
 
+func (dm *DatabaseMonitor) shouldSendAlert(databaseName, alertType string) bool {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	key := fmt.Sprintf("%s_%s", databaseName, alertType)
+	count := dm.alertCounts[key]
+
+	// Send alert on first occurrence, then every 10th occurrence to avoid spam
+	if count == 0 || count%10 == 0 {
+		dm.alertCounts[key] = count + 1
+		return true
+	}
+
+	dm.alertCounts[key] = count + 1
+	return false
+}
+
 func (dm *DatabaseMonitor) sendAlert(alert Alert) {
-	subject := fmt.Sprintf("ALERTA DB Monitor: %s - %s", alert.DatabaseName, alert.AlertType)
+	subject := fmt.Sprintf("DB Monitor ALERT: %s - %s", alert.DatabaseName, alert.AlertType)
 
 	var body string
 	if alert.Value > 0 && alert.Threshold > 0 {
 		body = fmt.Sprintf(`
-ALERTA DE MONITORAMENTO DE BANCO DE DADOS
+DATABASE MONITORING ALERT
 
-Banco de Dados: %s
-Tipo de Alerta: %s
-Mensagem: %s
-Valor Atual: %d
-Limite Configurado: %d
+Database: %s
+Alert Type: %s
+Message: %s
+Current Value: %d
+Configured Threshold: %d
 Timestamp: %s
 
-Este é um alerta automatizado do sistema de monitoramento.
-Por favor, verifique o estado do banco de dados.
+This is an automated alert from the database monitoring system.
+Please check the database status immediately.
+
+Connection Pool Information:
+- Pool connections are managed automatically
+- Unhealthy connections are automatically recreated
+- Health checks run every 30 seconds
 		`, alert.DatabaseName, alert.AlertType, alert.Message,
 			alert.Value, alert.Threshold, alert.Timestamp.Format("2006-01-02 15:04:05"))
 	} else {
 		body = fmt.Sprintf(`
-ALERTA DE MONITORAMENTO DE BANCO DE DADOS
+DATABASE MONITORING ALERT
 
-Banco de Dados: %s
-Tipo de Alerta: %s
-Mensagem: %s
+Database: %s
+Alert Type: %s
+Message: %s
 Timestamp: %s
 
-Este é um alerta automatizado do sistema de monitoramento.
-Por favor, verifique o estado do banco de dados.
+This is an automated alert from the database monitoring system.
+Please check the database status immediately.
+
+Connection Pool Information:
+- Pool connections are managed automatically
+- Unhealthy connections are automatically recreated
+- Health checks run every 30 seconds
 		`, alert.DatabaseName, alert.AlertType, alert.Message,
 			alert.Timestamp.Format("2006-01-02 15:04:05"))
 	}
 
 	if err := dm.notifier.SendAlert(subject, body); err != nil {
-		log.Printf("Erro ao enviar alerta para %s: %v", alert.DatabaseName, err)
+		log.Printf("Failed to send alert for %s: %v", alert.DatabaseName, err)
 	} else {
-		log.Printf("Alerta enviado para %s: %s", alert.DatabaseName, alert.AlertType)
+		log.Printf("Alert sent for %s: %s", alert.DatabaseName, alert.AlertType)
 	}
 }
 
@@ -210,7 +242,7 @@ func (dm *DatabaseMonitor) GetLastStats() map[string]*database.SessionStats {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
-	// Criar cópia das estatísticas
+	// Create copy of statistics
 	stats := make(map[string]*database.SessionStats)
 	for k, v := range dm.lastStats {
 		statsCopy := *v
@@ -220,16 +252,45 @@ func (dm *DatabaseMonitor) GetLastStats() map[string]*database.SessionStats {
 	return stats
 }
 
+func (dm *DatabaseMonitor) GetPoolStats(ctx context.Context) (map[string]*database.PoolStats, error) {
+	return dm.pool.GetAllStats(ctx)
+}
+
+func (dm *DatabaseMonitor) HealthCheck(ctx context.Context) map[string]error {
+	return dm.pool.HealthCheck(ctx)
+}
+
+func (dm *DatabaseMonitor) ResetAlertCounts() {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	dm.alertCounts = make(map[string]int)
+	log.Println("Alert counts reset")
+}
+
+func (dm *DatabaseMonitor) GetAlertCounts() map[string]int {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	counts := make(map[string]int)
+	for k, v := range dm.alertCounts {
+		counts[k] = v
+	}
+	return counts
+}
+
 func (dm *DatabaseMonitor) Close() error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	for name, conn := range dm.connections {
-		if err := conn.Close(); err != nil {
-			log.Printf("Erro ao fechar conexão com %s: %v", name, err)
-		}
+	// Close connection pool
+	if err := dm.pool.Close(); err != nil {
+		log.Printf("Error closing connection pool: %v", err)
+		return err
 	}
 
-	dm.connections = make(map[string]*database.Connection)
+	// Clear statistics
+	dm.lastStats = make(map[string]*database.SessionStats)
+	dm.alertCounts = make(map[string]int)
+
+	log.Println("Database monitor closed successfully")
 	return nil
-}
