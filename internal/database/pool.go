@@ -1,4 +1,3 @@
-// internal/database/pool.go
 package database
 
 import (
@@ -43,19 +42,16 @@ func (p *Pool) GetConnection(cfg config.DatabaseConfig) (*Connection, error) {
 	if conn, exists := p.connections[cfg.Name]; exists {
 		p.mu.RUnlock()
 
-		// Quick health check
 		if err := conn.IsHealthy(context.Background()); err == nil {
 			return conn, nil
 		}
 
 		log.Printf("Connection to %s is unhealthy, recreating: %v", cfg.Name, err)
-		// Connection is unhealthy, remove and recreate
 		p.removeConnection(cfg.Name)
 	} else {
 		p.mu.RUnlock()
 	}
 
-	// Create new connection
 	return p.createConnection(cfg)
 }
 
@@ -63,12 +59,10 @@ func (p *Pool) createConnection(cfg config.DatabaseConfig) (*Connection, error) 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Double-check if another goroutine created the connection
 	if conn, exists := p.connections[cfg.Name]; exists {
 		if err := conn.IsHealthy(context.Background()); err == nil {
 			return conn, nil
 		}
-		// Still unhealthy, proceed with recreation
 		conn.Close()
 	}
 
@@ -129,7 +123,6 @@ func (p *Pool) GetAllStats(ctx context.Context) (map[string]*PoolStats, error) {
 	wg.Wait()
 
 	if len(errors) > 0 {
-		// Return partial results with error information
 		log.Printf("Encountered %d errors while collecting pool stats", len(errors))
 		for _, err := range errors {
 			log.Printf("Pool stats error: %v", err)
@@ -140,10 +133,8 @@ func (p *Pool) GetAllStats(ctx context.Context) (map[string]*PoolStats, error) {
 }
 
 func (p *Pool) getConnectionStats(ctx context.Context, name string, conn *Connection) (*PoolStats, error) {
-	// Get basic DB stats
 	dbStats := conn.GetDBStats()
 
-	// Check health
 	isHealthy := conn.IsHealthy(ctx) == nil
 
 	stats := &PoolStats{
@@ -158,7 +149,6 @@ func (p *Pool) getConnectionStats(ctx context.Context, name string, conn *Connec
 		IsHealthy:        isHealthy,
 	}
 
-	// Try to get extended stats for PostgreSQL
 	if conn.config.Type == "postgresql" {
 		if provider, ok := conn.stats.(*PostgreSQLStatsProvider); ok {
 			if extended, err := provider.GetExtendedStats(ctx, conn.db); err == nil {
@@ -197,7 +187,6 @@ func (p *Pool) HealthCheck(ctx context.Context) map[string]error {
 
 			if err != nil {
 				log.Printf("Health check failed for %s: %v", dbName, err)
-				// Remove unhealthy connection
 				go p.removeConnection(dbName)
 			}
 		}(name, conn)
@@ -244,7 +233,6 @@ func (p *Pool) RemoveConnection(name string) error {
 	return nil
 }
 
-// StartHealthCheckRoutine starts a background goroutine that periodically checks connection health
 func (p *Pool) StartHealthCheckRoutine(ctx context.Context) {
 	ticker := time.NewTicker(p.healthCheck)
 	defer ticker.Stop()

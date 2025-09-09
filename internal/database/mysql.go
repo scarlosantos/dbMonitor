@@ -48,13 +48,12 @@ func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*
 	stats.Waiting = waiting
 	stats.Total = total
 	stats.Inactive = idle
-	stats.IdleInTxn = 0 // MySQL doesn't have this concept like PostgreSQL
+	stats.IdleInTxn = 0
 
 	return &stats, nil
 }
 
 func connectMySQL(cfg config.DatabaseConfig) (*sql.DB, error) {
-	// Configure TLS if certificate path is provided
 	if cfg.CertPath != "" {
 		tlsConfig, err := loadMySQLTLSConfig(cfg.CertPath)
 		if err != nil {
@@ -63,7 +62,6 @@ func connectMySQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 		mysql.RegisterTLSConfig("custom", tlsConfig)
 	}
 
-	// Build DSN with proper error handling
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?tls=%s&timeout=30s&readTimeout=30s&writeTimeout=30s&parseTime=true",
 		cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database,
 		getMySQLTLSMode(cfg.SSLMode, cfg.CertPath))
@@ -73,7 +71,6 @@ func connectMySQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open MySQL connection: %w", err)
 	}
 
-	// Test the connection with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -90,7 +87,6 @@ func loadMySQLTLSConfig(certPath string) (*tls.Config, error) {
 	keyFile := filepath.Join(certPath, "client-key.pem")
 	caFile := filepath.Join(certPath, "ca-cert.pem")
 
-	// Verify files exist
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
 		return nil, fmt.Errorf("client certificate file not found: %s", certFile)
 	}
@@ -119,7 +115,7 @@ func loadMySQLTLSConfig(certPath string) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      caCertPool,
-		ServerName:   "", // Will be set automatically
+		ServerName:   "",
 	}, nil
 }
 

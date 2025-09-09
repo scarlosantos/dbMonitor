@@ -54,13 +54,11 @@ func NewConnection(cfg config.DatabaseConfig) (*Connection, error) {
 		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
 	}
 
-	// Configure connection pool
 	if err := configureConnectionPool(db, cfg.Type); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to configure connection pool for %s: %w", cfg.Name, err)
 	}
 
-	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -84,7 +82,6 @@ func (c *Connection) Close() error {
 }
 
 func (c *Connection) GetSessionStats(ctx context.Context) (*SessionStats, error) {
-	// Verify connection health before querying
 	if err := c.db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("database connection unhealthy for %s: %w", c.config.Name, err)
 	}
@@ -105,7 +102,6 @@ func (c *Connection) IsHealthy(ctx context.Context) error {
 		return fmt.Errorf("database connection is nil")
 	}
 
-	// Test with timeout
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -121,22 +117,18 @@ func (c *Connection) GetDBStats() sql.DBStats {
 }
 
 func configureConnectionPool(db *sql.DB, dbType string) error {
-	// Common pool settings
-	db.SetMaxOpenConns(10)                  // Maximum number of open connections
-	db.SetMaxIdleConns(5)                   // Maximum number of idle connections
-	db.SetConnMaxLifetime(time.Hour)        // Maximum lifetime of a connection
-	db.SetConnMaxIdleTime(10 * time.Minute) // Maximum idle time of a connection
+	db.SetMaxOpenConns(3)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
+	db.SetConnMaxIdleTime(10 * time.Minute)
 
-	// Database-specific adjustments
 	switch dbType {
 	case "mysql":
-		// MySQL can handle more concurrent connections typically
-		db.SetMaxOpenConns(15)
-		db.SetMaxIdleConns(7)
+		db.SetMaxOpenConns(3)
+		db.SetMaxIdleConns(1)
 	case "postgresql":
-		// PostgreSQL is generally more conservative with connections
-		db.SetMaxOpenConns(10)
-		db.SetMaxIdleConns(5)
+		db.SetMaxOpenConns(3)
+		db.SetMaxIdleConns(1)
 	}
 
 	return nil

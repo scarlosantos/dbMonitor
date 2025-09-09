@@ -41,7 +41,6 @@ func NewDatabaseMonitor(cfg *config.Config, notifier notifier.Notifier) *Databas
 		alertCounts: make(map[string]int),
 	}
 
-	// Start health check routine for connection pool
 	go pool.StartHealthCheckRoutine(context.Background())
 
 	return monitor
@@ -79,7 +78,6 @@ func (dm *DatabaseMonitor) CheckAllInstances(ctx context.Context) error {
 }
 
 func (dm *DatabaseMonitor) checkInstance(ctx context.Context, cfg config.DatabaseConfig) error {
-	// Get connection from pool
 	conn, err := dm.pool.GetConnection(cfg)
 	if err != nil {
 		log.Printf("Failed to get connection for %s: %v", cfg.Name, err)
@@ -92,11 +90,9 @@ func (dm *DatabaseMonitor) checkInstance(ctx context.Context, cfg config.Databas
 		return err
 	}
 
-	// Create timeout context for stats collection
 	statsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	// Get session statistics
 	stats, err := conn.GetSessionStats(statsCtx)
 	if err != nil {
 		log.Printf("Failed to get statistics for %s: %v", cfg.Name, err)
@@ -109,7 +105,6 @@ func (dm *DatabaseMonitor) checkInstance(ctx context.Context, cfg config.Databas
 		return err
 	}
 
-	// Store current statistics
 	dm.mu.Lock()
 	dm.lastStats[cfg.Name] = stats
 	dm.mu.Unlock()
@@ -117,7 +112,6 @@ func (dm *DatabaseMonitor) checkInstance(ctx context.Context, cfg config.Databas
 	log.Printf("DB: %s | Total: %d | Active: %d | Inactive: %d | Idle: %d | Waiting: %d",
 		stats.DatabaseName, stats.Total, stats.Active, stats.Inactive, stats.Idle, stats.Waiting)
 
-	// Check thresholds and send alerts if necessary
 	dm.checkThresholds(stats)
 
 	return nil
@@ -127,7 +121,6 @@ func (dm *DatabaseMonitor) checkThresholds(stats *database.SessionStats) {
 	thresholds := dm.config.Thresholds
 	alertKey := stats.DatabaseName
 
-	// Check active connections
 	if stats.Active > thresholds.ActiveConnections {
 		if dm.shouldSendAlert(alertKey, "HIGH_ACTIVE_CONNECTIONS") {
 			dm.sendAlert(Alert{
@@ -141,7 +134,6 @@ func (dm *DatabaseMonitor) checkThresholds(stats *database.SessionStats) {
 		}
 	}
 
-	// Check inactive connections
 	if stats.Inactive > thresholds.InactiveConnections {
 		if dm.shouldSendAlert(alertKey, "HIGH_INACTIVE_CONNECTIONS") {
 			dm.sendAlert(Alert{
@@ -155,7 +147,6 @@ func (dm *DatabaseMonitor) checkThresholds(stats *database.SessionStats) {
 		}
 	}
 
-	// Check total connections
 	if stats.Total > thresholds.TotalConnections {
 		if dm.shouldSendAlert(alertKey, "HIGH_TOTAL_CONNECTIONS") {
 			dm.sendAlert(Alert{
@@ -177,7 +168,6 @@ func (dm *DatabaseMonitor) shouldSendAlert(databaseName, alertType string) bool 
 	key := fmt.Sprintf("%s_%s", databaseName, alertType)
 	count := dm.alertCounts[key]
 
-	// Send alert on first occurrence, then every 10th occurrence to avoid spam
 	if count == 0 || count%10 == 0 {
 		dm.alertCounts[key] = count + 1
 		return true
@@ -242,7 +232,6 @@ func (dm *DatabaseMonitor) GetLastStats() map[string]*database.SessionStats {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
-	// Create copy of statistics
 	stats := make(map[string]*database.SessionStats)
 	for k, v := range dm.lastStats {
 		statsCopy := *v
@@ -282,15 +271,14 @@ func (dm *DatabaseMonitor) Close() error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	// Close connection pool
 	if err := dm.pool.Close(); err != nil {
 		log.Printf("Error closing connection pool: %v", err)
 		return err
 	}
 
-	// Clear statistics
 	dm.lastStats = make(map[string]*database.SessionStats)
 	dm.alertCounts = make(map[string]int)
 
 	log.Println("Database monitor closed successfully")
 	return nil
+}
