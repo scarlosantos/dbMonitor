@@ -31,7 +31,7 @@ type Alert struct {
 }
 
 func NewDatabaseMonitor(cfg *config.Config, notifier notifier.Notifier) *DatabaseMonitor {
-	pool := database.NewPool()
+	pool := database.NewPool(cfg.Pool)
 
 	monitor := &DatabaseMonitor{
 		config:      cfg,
@@ -198,9 +198,9 @@ Please check the database status immediately.
 Connection Pool Information:
 - Pool connections are managed automatically
 - Unhealthy connections are automatically recreated
-- Health checks run every 30 seconds
+- Health checks run every %d seconds
 		`, alert.DatabaseName, alert.AlertType, alert.Message,
-			alert.Value, alert.Threshold, alert.Timestamp.Format("2006-01-02 15:04:05"))
+			alert.Value, alert.Threshold, alert.Timestamp.Format("2006-01-02 15:04:05"), dm.config.Pool.HealthCheckInterval)
 	} else {
 		body = fmt.Sprintf(`
 DATABASE MONITORING ALERT
@@ -216,9 +216,9 @@ Please check the database status immediately.
 Connection Pool Information:
 - Pool connections are managed automatically
 - Unhealthy connections are automatically recreated
-- Health checks run every 30 seconds
+- Health checks run every %d seconds
 		`, alert.DatabaseName, alert.AlertType, alert.Message,
-			alert.Timestamp.Format("2006-01-02 15:04:05"))
+			alert.Timestamp.Format("2006-01-02 15:04:05"), dm.config.Pool.HealthCheckInterval)
 	}
 
 	if err := dm.notifier.SendAlert(subject, body); err != nil {

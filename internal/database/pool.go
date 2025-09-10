@@ -14,7 +14,7 @@ import (
 type Pool struct {
 	connections map[string]*Connection
 	mu          sync.RWMutex
-	healthCheck time.Duration
+	poolCfg     config.PoolConfig
 }
 
 type PoolStats struct {
@@ -30,10 +30,10 @@ type PoolStats struct {
 	Extended         map[string]interface{} `json:"extended,omitempty"`
 }
 
-func NewPool() *Pool {
+func NewPool(poolCfg config.PoolConfig) *Pool {
 	return &Pool{
 		connections: make(map[string]*Connection),
-		healthCheck: 30 * time.Second,
+		poolCfg:     poolCfg,
 	}
 }
 
@@ -66,7 +66,7 @@ func (p *Pool) createConnection(cfg config.DatabaseConfig) (*Connection, error) 
 		conn.Close()
 	}
 
-	conn, err := NewConnection(cfg)
+	conn, err := NewConnection(cfg, p.poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection for %s: %w", cfg.Name, err)
 	}
@@ -234,7 +234,7 @@ func (p *Pool) RemoveConnection(name string) error {
 }
 
 func (p *Pool) StartHealthCheckRoutine(ctx context.Context) {
-	ticker := time.NewTicker(p.healthCheck)
+	ticker := time.NewTicker(time.Duration(p.poolCfg.HealthCheckInterval) * time.Second)
 	defer ticker.Stop()
 
 	go func() {

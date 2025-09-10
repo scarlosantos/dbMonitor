@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 
 	"dbMonitor/internal/config"
@@ -30,36 +31,45 @@ type SessionStats struct {
 	Timestamp    string
 }
 
-func NewConnection(cfg config.DatabaseConfig) (*Connection, error) {
+func NewConnection(cfg config.DatabaseConfig, poolCfg config.PoolConfig) (*Connection, error) {
 	var db *sql.DB
 	var stats StatsProvider
 	var err error
 
-	switch cfg.Type {
-	case "mysql":
-		db, err = connectMySQL(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to MySQL %s: %w", cfg.Name, err)
-		}
-		stats = NewMySQLStatsProvider()
+	// Retry loop with exponential backoff
+	backoff := time.Duration(poolCfg.BackoffInitial) * time.Second
+	maxBackoff := time.Duration(poolCfg.BackoffMax) * time.Second
 
-	case "postgresql":
-		db, err = connectPostgreSQL(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to PostgreSQL %s: %w", cfg.Name, err)
+	for {
+		switch cfg.Type {
+		case "mysql":
+			db, err = connectMySQL(cfg)
+			stats = NewMySQLStatsProvider()
+		case "postgresql":
+			db, err = connectPostgreSQL(cfg)
+			stats = NewPostgreSQLStatsProvider()
+		default:
+			return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
 		}
-		stats = NewPostgreSQLStatsProvider()
 
-	default:
-		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
+		if err == nil {
+			break // Success
+		}
+
+		log.Printf("Failed to connect to %s: %v. Retrying in %v...", cfg.Name, err, backoff)
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 
-	if err := configureConnectionPool(db, cfg.Type); err != nil {
+	if err := configureConnectionPool(db, poolCfg); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to configure connection pool for %s: %w", cfg.Name, err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ConnectTimeout)*time.Second)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
@@ -116,20 +126,11 @@ func (c *Connection) GetDBStats() sql.DBStats {
 	return c.db.Stats()
 }
 
-func configureConnectionPool(db *sql.DB, dbType string) error {
-	db.SetMaxOpenConns(3)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
-	db.SetConnMaxIdleTime(10 * time.Minute)
-
-	switch dbType {
-	case "mysql":
-		db.SetMaxOpenConns(3)
-		db.SetMaxIdleConns(1)
-	case "postgresql":
-		db.SetMaxOpenConns(3)
-		db.SetMaxIdleConns(1)
-	}
+func configureConnectionPool(db *sql.DB, poolCfg config.PoolConfig) error {
+	db.SetMaxOpenConns(poolCfg.MaxOpenConns)
+	db.SetMaxIdleConns(poolCfg.MaxIdleConns)
+	db.SetConnMaxLifetime(time.Duration(poolCfg.ConnMaxLifetime) * time.Second)
+	db.SetConnMaxIdleTime(time.Duration(poolCfg.ConnMaxIdleTime) * time.Second)
 
 	return nil
 }

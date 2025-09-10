@@ -2,12 +2,8 @@ package database
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"dbMonitor/internal/config"
@@ -32,13 +28,13 @@ func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*
 		WHERE id != CONNECTION_ID()
 	`
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	queryCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.QueryTimeout)*time.Second)
 	defer cancel()
 
 	var stats SessionStats
 	var idle, active, waiting, total int
 
-	err := db.QueryRowContext(ctx, query).Scan(&idle, &active, &waiting, &total)
+	err := db.QueryRowContext(queryCtx, query).Scan(&idle, &active, &waiting, &total)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query MySQL statistics: %w", err)
 	}
@@ -55,68 +51,32 @@ func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*
 
 func connectMySQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 	if cfg.CertPath != "" {
-		tlsConfig, err := loadMySQLTLSConfig(cfg.CertPath)
+		tlsConfig, err := loadTLSConfig(cfg.CertPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to configure TLS: %w", err)
 		}
 		mysql.RegisterTLSConfig("custom", tlsConfig)
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?tls=%s&timeout=30s&readTimeout=30s&writeTimeout=30s&parseTime=true",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?tls=%s&timeout=%ds&readTimeout=%ds&writeTimeout=%ds&parseTime=true",
 		cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database,
-		getMySQLTLSMode(cfg.SSLMode, cfg.CertPath))
+		getMySQLTLSMode(cfg.SSLMode, cfg.CertPath),
+		cfg.ConnectTimeout, cfg.QueryTimeout, cfg.QueryTimeout)
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open MySQL connection: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	pingCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ConnectTimeout)*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := db.PingContext(pingCtx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("MySQL connection test failed: %w", err)
 	}
 
 	return db, nil
-}
-
-func loadMySQLTLSConfig(certPath string) (*tls.Config, error) {
-	certFile := filepath.Join(certPath, "client-cert.pem")
-	keyFile := filepath.Join(certPath, "client-key.pem")
-	caFile := filepath.Join(certPath, "ca-cert.pem")
-
-	if _, err := os.Stat(certFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("client certificate file not found: %s", certFile)
-	}
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("client key file not found: %s", keyFile)
-	}
-	if _, err := os.Stat(caFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("CA certificate file not found: %s", caFile)
-	}
-
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load client certificate: %w", err)
-	}
-
-	caCert, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-	}
-
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA certificate")
-	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caCertPool,
-		ServerName:   "",
-	}, nil
 }
 
 func getMySQLTLSMode(sslMode, certPath string) string {

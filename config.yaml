@@ -1,4 +1,3 @@
-# config.yaml - Exemplo de configuração
 databases:
   # Configuração MySQL com SSL
   - name: "mysql_producao"
@@ -10,6 +9,8 @@ databases:
     password: "senha_segura_mysql"
     ssl_mode: "REQUIRED"
     cert_path: "certs/mysql_producao"
+    connect_timeout: 30
+    query_timeout: 30
 
   # Configuração MySQL sem SSL (para desenvolvimento)
   - name: "mysql_desenvolvimento"
@@ -21,6 +22,8 @@ databases:
     password: "root123"
     ssl_mode: "DISABLED"
     cert_path: ""
+    connect_timeout: 10
+    query_timeout: 15
 
   # Configuração PostgreSQL com SSL
   - name: "postgres_producao"
@@ -32,6 +35,8 @@ databases:
     password: "senha_segura_postgres"
     ssl_mode: "require"
     cert_path: "certs/postgres_producao"
+    connect_timeout: 30
+    query_timeout: 30
 
   # Configuração PostgreSQL sem SSL
   - name: "postgres_desenvolvimento"
@@ -43,6 +48,8 @@ databases:
     password: "postgres123"
     ssl_mode: "disable"
     cert_path: ""
+    connect_timeout: 10
+    query_timeout: 15
 
   # Configuração PostgreSQL com SSL verify-full
   - name: "postgres_critico"
@@ -54,6 +61,8 @@ databases:
     password: "senha_muito_segura"
     ssl_mode: "verify-full"
     cert_path: "certs/postgres_critico"
+    connect_timeout: 30
+    query_timeout: 45
 
 # Configuração de email
 email:
@@ -73,3 +82,13 @@ thresholds:
   active_connections: 80      # Alerta se conexões ativas > 80
   inactive_connections: 100   # Alerta se conexões inativas > 100
   total_connections: 150      # Alerta se total de conexões > 150
+
+# Configuração do pool de conexões
+pool:
+  max_open_conns: 5
+  max_idle_conns: 2
+  conn_max_lifetime: 3600    # Em segundos (1 hora)
+  conn_max_idle_time: 600    # Em segundos (10 minutos)
+  health_check_interval: 30  # Em segundos
+  backoff_initial: 1         # Em segundos
+  backoff_max: 60            # Em segundos

@@ -31,7 +31,7 @@ func (p *PostgreSQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.D
 		AND state IS NOT NULL
 	`
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.QueryTimeout)*time.Second)
 	defer cancel()
 
 	var stats SessionStats
@@ -53,8 +53,8 @@ func (p *PostgreSQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.D
 }
 
 func connectPostgreSQL(cfg config.DatabaseConfig) (*sql.DB, error) {
-	connStr := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s connect_timeout=30",
-		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, cfg.SSLMode)
+	connStr := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s connect_timeout=%d",
+		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, cfg.SSLMode, cfg.ConnectTimeout)
 
 	if cfg.CertPath != "" {
 		if err := validatePostgreSQLCertFiles(cfg.CertPath); err != nil {
@@ -74,7 +74,7 @@ func connectPostgreSQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open PostgreSQL connection: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ConnectTimeout)*time.Second)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
@@ -112,7 +112,7 @@ func validatePostgreSQLCertFiles(certPath string) error {
 }
 
 func (p *PostgreSQLStatsProvider) GetExtendedStats(ctx context.Context, db *sql.DB) (map[string]interface{}, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.QueryTimeout)*time.Second)
 	defer cancel()
 
 	stats := make(map[string]interface{})

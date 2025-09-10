@@ -1,4 +1,3 @@
-// internal/config/config.go
 package config
 
 import (
@@ -12,18 +11,21 @@ type Config struct {
 	Databases  []DatabaseConfig `yaml:"databases"`
 	Email      EmailConfig      `yaml:"email"`
 	Thresholds ThresholdConfig  `yaml:"thresholds"`
+	Pool       PoolConfig       `yaml:"pool"`
 }
 
 type DatabaseConfig struct {
-	Name     string `yaml:"name"`
-	Type     string `yaml:"type"`
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Database string `yaml:"database"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	SSLMode  string `yaml:"ssl_mode"`
-	CertPath string `yaml:"cert_path"`
+	Name           string `yaml:"name"`
+	Type           string `yaml:"type"`
+	Host           string `yaml:"host"`
+	Port           int    `yaml:"port"`
+	Database       string `yaml:"database"`
+	Username       string `yaml:"username"`
+	Password       string `yaml:"password"`
+	SSLMode        string `yaml:"ssl_mode"`
+	CertPath       string `yaml:"cert_path"`
+	ConnectTimeout int    `yaml:"connect_timeout"`
+	QueryTimeout   int    `yaml:"query_timeout"`
 }
 
 type EmailConfig struct {
@@ -40,6 +42,16 @@ type ThresholdConfig struct {
 	ActiveConnections   int `yaml:"active_connections"`
 	InactiveConnections int `yaml:"inactive_connections"`
 	TotalConnections    int `yaml:"total_connections"`
+}
+
+type PoolConfig struct {
+	MaxOpenConns        int `yaml:"max_open_conns"`
+	MaxIdleConns        int `yaml:"max_idle_conns"`
+	ConnMaxLifetime     int `yaml:"conn_max_lifetime"`
+	ConnMaxIdleTime     int `yaml:"conn_max_idle_time"`
+	HealthCheckInterval int `yaml:"health_check_interval"`
+	BackoffInitial      int `yaml:"backoff_initial"`
+	BackoffMax          int `yaml:"backoff_max"`
 }
 
 func Load(configPath string) (*Config, error) {
