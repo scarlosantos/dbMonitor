@@ -4,12 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
 	"dbMonitor/internal/config"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type PostgreSQLStatsProvider struct{}
@@ -18,7 +17,7 @@ func NewPostgreSQLStatsProvider() *PostgreSQLStatsProvider {
 	return &PostgreSQLStatsProvider{}
 }
 
-func (p *PostgreSQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*SessionStats, error) {
+func (p *PostgreSQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB, queryTimeout int) (*SessionStats, error) {
 	query := `
 		SELECT 
 			COALESCE(SUM(CASE WHEN state = 'active' THEN 1 ELSE 0 END), 0) as active,
@@ -31,7 +30,7 @@ func (p *PostgreSQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.D
 		AND state IS NOT NULL
 	`
 
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.QueryTimeout)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(queryTimeout)*time.Second)
 	defer cancel()
 
 	var stats SessionStats
@@ -57,7 +56,7 @@ func connectPostgreSQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, cfg.SSLMode, cfg.ConnectTimeout)
 
 	if cfg.CertPath != "" {
-		if err := validatePostgreSQLCertFiles(cfg.CertPath); err != nil {
+		if err := validateTLSCertFiles(cfg.CertPath); err != nil {
 			return nil, fmt.Errorf("certificate validation failed: %w", err)
 		}
 
@@ -67,6 +66,12 @@ func connectPostgreSQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 
 		connStr += fmt.Sprintf(" sslcert=%s sslkey=%s sslrootcert=%s",
 			certFile, keyFile, caFile)
+	}
+
+	if cfg.SSLMode == "verify-full" {
+		pq.NewConnector(connStr)
+		// A validação do ServerName é feita automaticamente pelo driver pq
+		// quando sslmode=verify-full.
 	}
 
 	db, err := sql.Open("postgres", connStr)
@@ -85,34 +90,8 @@ func connectPostgreSQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 	return db, nil
 }
 
-func validatePostgreSQLCertFiles(certPath string) error {
-	certFile := filepath.Join(certPath, "client-cert.pem")
-	keyFile := filepath.Join(certPath, "client-key.pem")
-	caFile := filepath.Join(certPath, "ca-cert.pem")
-
-	files := map[string]string{
-		"client certificate": certFile,
-		"client key":         keyFile,
-		"CA certificate":     caFile,
-	}
-
-	for fileType, filePath := range files {
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			return fmt.Errorf("%s file not found: %s", fileType, filePath)
-		}
-
-		file, err := os.Open(filePath)
-		if err != nil {
-			return fmt.Errorf("cannot read %s file %s: %w", fileType, filePath, err)
-		}
-		file.Close()
-	}
-
-	return nil
-}
-
-func (p *PostgreSQLStatsProvider) GetExtendedStats(ctx context.Context, db *sql.DB) (map[string]interface{}, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.QueryTimeout)*time.Second)
+func (p *PostgreSQLStatsProvider) GetExtendedStats(ctx context.Context, db *sql.DB, queryTimeout int) (map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(queryTimeout)*time.Second)
 	defer cancel()
 
 	stats := make(map[string]interface{})

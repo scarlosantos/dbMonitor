@@ -28,7 +28,7 @@ func validateTLSCertFiles(certPath string) error {
 	return nil
 }
 
-func loadTLSConfig(certPath string) (*tls.Config, error) {
+func loadTLSConfig(certPath string, serverName string) (*tls.Config, error) {
 	if err := validateTLSCertFiles(certPath); err != nil {
 		return nil, fmt.Errorf("certificate validation failed: %w", err)
 	}
@@ -55,6 +55,6 @@ func loadTLSConfig(certPath string) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      caCertPool,
-		ServerName:   "",
+		ServerName:   serverName,
 	}, nil
 }

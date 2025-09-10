@@ -77,13 +77,17 @@ email:
     - "suporte@exemplo.com"
   use_tls: true
 
+# Configuração de notificação via Slack
+slack:
+  webhook_url: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+
 # Configuração de thresholds para alertas
 thresholds:
   active_connections: 80      # Alerta se conexões ativas > 80
   inactive_connections: 100   # Alerta se conexões inativas > 100
   total_connections: 150      # Alerta se total de conexões > 150
 
-# Configuração do pool de conexões
+# Configuração do pool de conexões e monitoramento
 pool:
   max_open_conns: 5
   max_idle_conns: 2
@@ -92,3 +96,11 @@ pool:
   health_check_interval: 30  # Em segundos
   backoff_initial: 1         # Em segundos
   backoff_max: 60            # Em segundos
+
+# Configuração geral da aplicação
+application:
+  monitoring_interval: 60        # Intervalo de monitoramento em segundos
+  health_check_interval: 300     # Intervalo de verificação de saúde do pool em segundos
+  alert_reset_interval: 3600     # Intervalo para resetar contadores de alerta em segundos
+  alert_frequency: 10            # Frequência de envio de alertas (ex: a cada 10 ocorrências)
+  http_server_address: ":8080"   # Endereço para o servidor HTTP

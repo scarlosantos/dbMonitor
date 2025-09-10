@@ -1,9 +1,12 @@
-// internal/notifier/notifier.go
 package notifier
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"time"
 
 	"dbMonitor/internal/config"
 	"gopkg.in/gomail.v2"
@@ -20,10 +23,7 @@ type EmailNotifier struct {
 
 func NewEmailNotifier(cfg config.EmailConfig) *EmailNotifier {
 	d := gomail.NewDialer(cfg.SMTPHost, cfg.SMTPPort, cfg.Username, cfg.Password)
-
-	if cfg.UseTLS {
-		d.TLSConfig = nil // Use default TLS config
-	}
+	d.TLSConfig = nil
 
 	return &EmailNotifier{
 		config: cfg,
@@ -34,23 +34,15 @@ func NewEmailNotifier(cfg config.EmailConfig) *EmailNotifier {
 func (e *EmailNotifier) SendAlert(subject, body string) error {
 	m := gomail.NewMessage()
 
-	// Configurar remetente
 	m.SetHeader("From", e.config.FromEmail)
-
-	// Configurar destinatários
 	if len(e.config.ToEmails) == 0 {
-		return fmt.Errorf("nenhum destinatário configurado")
+		return fmt.Errorf("nenhum destinatário de email configurado")
 	}
-
 	m.SetHeader("To", e.config.ToEmails...)
-
-	// Configurar assunto e corpo
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/plain", body)
 
-	// Enviar email
 	if err := e.dialer.DialAndSend(m); err != nil {
-		log.Printf("Erro ao enviar email: %v", err)
 		return fmt.Errorf("falha ao enviar email: %w", err)
 	}
 
@@ -59,35 +51,56 @@ func (e *EmailNotifier) SendAlert(subject, body string) error {
 }
 
 func (e *EmailNotifier) TestConnection() error {
-	// Testar conexão SMTP
 	closer, err := e.dialer.Dial()
 	if err != nil {
 		return fmt.Errorf("erro ao conectar com servidor SMTP: %w", err)
 	}
 	defer closer.Close()
-
-	log.Println("Teste de conexão SMTP realizado com sucesso")
 	return nil
 }
 
-// Implementação alternativa para outros tipos de notificação (futuro)
+// Slack Notifier
 type SlackNotifier struct {
 	webhookURL string
 }
 
-func NewSlackNotifier(webhookURL string) *SlackNotifier {
-	return &SlackNotifier{
-		webhookURL: webhookURL,
+func NewSlackNotifier(cfg config.SlackConfig) (*SlackNotifier, error) {
+	if cfg.WebhookURL == "" {
+		return nil, fmt.Errorf("URL do webhook do Slack não configurada")
 	}
+	return &SlackNotifier{
+		webhookURL: cfg.WebhookURL,
+	}, nil
 }
 
 func (s *SlackNotifier) SendAlert(subject, body string) error {
-	// Implementação futura para Slack
-	log.Printf("Slack notification (não implementado): %s", subject)
+	payload := map[string]string{
+		"text": fmt.Sprintf("*%s*\n```%s```", subject, body),
+	}
+	jsonPayload, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", s.webhookURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("falha ao criar requisição para o Slack: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("falha ao enviar notificação para o Slack: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("erro do servidor Slack: %s", resp.Status)
+	}
+
+	log.Printf("Notificação do Slack enviada com sucesso: %s", subject)
 	return nil
 }
 
-// Implementação para múltiplos notificadores
+// MultiNotifier
 type MultiNotifier struct {
 	notifiers []Notifier
 }
@@ -99,19 +112,21 @@ func NewMultiNotifier(notifiers ...Notifier) *MultiNotifier {
 }
 
 func (m *MultiNotifier) SendAlert(subject, body string) error {
-	var lastErr error
-
+	var errors []error
 	for _, notifier := range m.notifiers {
 		if err := notifier.SendAlert(subject, body); err != nil {
-			log.Printf("Erro em notificador: %v", err)
-			lastErr = err
+			errors = append(errors, err)
 		}
 	}
 
-	return lastErr
+	if len(errors) > 0 {
+		return fmt.Errorf("múltiplos erros de notificação: %v", errors)
+	}
+
+	return nil
 }
 
-// Implementação de notificador mock para testes
+// Mock Notifier para testes
 type MockNotifier struct {
 	SentAlerts []struct {
 		Subject string
@@ -136,7 +151,6 @@ func (m *MockNotifier) SendAlert(subject, body string) error {
 		Subject: subject,
 		Body:    body,
 	})
-
 	log.Printf("Mock alert: %s", subject)
 	return nil
 }
@@ -145,7 +159,6 @@ func (m *MockNotifier) GetLastAlert() (string, string) {
 	if len(m.SentAlerts) == 0 {
 		return "", ""
 	}
-
 	last := m.SentAlerts[len(m.SentAlerts)-1]
 	return last.Subject, last.Body
 }

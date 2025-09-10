@@ -1,7 +1,7 @@
-// main.go (Updated with enhanced features)
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
@@ -9,12 +9,33 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"text/template"
 	"time"
 
 	"dbMonitor/internal/config"
 	"dbMonitor/internal/monitor"
 	"dbMonitor/internal/notifier"
 )
+
+// Definição do template de email para maior flexibilidade
+const emailTemplate = `
+DATABASE MONITORING ALERT
+
+Database: {{.DatabaseName}}
+Alert Type: {{.AlertType}}
+Message: {{.Message}}
+{{if .Value}}Current Value: {{.Value}}{{end}}
+{{if .Threshold}}Configured Threshold: {{.Threshold}}{{end}}
+Timestamp: {{.Timestamp}}
+
+This is an automated alert from the database monitoring system.
+Please check the database status immediately.
+
+Connection Pool Information:
+- Pool connections are managed automatically
+- Unhealthy connections are automatically recreated
+- Health checks run every {{.HealthCheckInterval}} seconds
+`
 
 func main() {
 	// Load configuration
@@ -23,8 +44,20 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Initialize email notifier
+	// Initialize notifiers
+	var notifiers []notifier.Notifier
 	emailNotifier := notifier.NewEmailNotifier(cfg.Email)
+	notifiers = append(notifiers, emailNotifier)
+
+	if cfg.Slack.WebhookURL != "" {
+		slackNotifier, err := notifier.NewSlackNotifier(cfg.Slack)
+		if err == nil {
+			notifiers = append(notifiers, slackNotifier)
+		} else {
+			log.Printf("Warning: Failed to initialize Slack notifier: %v", err)
+		}
+	}
+	multiNotifier := notifier.NewMultiNotifier(notifiers...)
 
 	// Test email connection
 	if err := emailNotifier.TestConnection(); err != nil {
@@ -34,7 +67,7 @@ func main() {
 	}
 
 	// Initialize database monitor with connection pool
-	dbMonitor := monitor.NewDatabaseMonitor(cfg, emailNotifier)
+	dbMonitor := monitor.NewDatabaseMonitor(cfg, multiNotifier)
 	defer dbMonitor.Close()
 
 	// Setup context for graceful shutdown
@@ -52,7 +85,7 @@ func main() {
 	}()
 
 	// Start HTTP server for monitoring endpoints
-	go startHTTPServer(dbMonitor)
+	go startHTTPServer(dbMonitor, cfg.Application.HTTPServerAddress)
 
 	log.Println("Starting database monitoring with connection pooling...")
 
@@ -62,15 +95,15 @@ func main() {
 	}
 
 	// Setup monitoring ticker
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
+	monitoringTicker := time.NewTicker(time.Duration(cfg.Application.MonitoringInterval) * time.Second)
+	defer monitoringTicker.Stop()
 
-	// Setup health check ticker (every 5 minutes)
-	healthTicker := time.NewTicker(5 * time.Minute)
+	// Setup health check ticker
+	healthTicker := time.NewTicker(time.Duration(cfg.Application.HealthCheckInterval) * time.Second)
 	defer healthTicker.Stop()
 
-	// Setup alert reset ticker (every hour)
-	alertResetTicker := time.NewTicker(1 * time.Hour)
+	// Setup alert reset ticker
+	alertResetTicker := time.NewTicker(time.Duration(cfg.Application.AlertResetInterval) * time.Second)
 	defer alertResetTicker.Stop()
 
 	for {
@@ -79,7 +112,7 @@ func main() {
 			log.Println("Database monitoring stopped")
 			return
 
-		case <-ticker.C:
+		case <-monitoringTicker.C:
 			if err := dbMonitor.CheckAllInstances(ctx); err != nil {
 				log.Printf("Monitoring check completed with errors: %v", err)
 			}
@@ -105,7 +138,7 @@ func main() {
 	}
 }
 
-func startHTTPServer(dbMonitor *monitor.DatabaseMonitor) {
+func startHTTPServer(dbMonitor *monitor.DatabaseMonitor, address string) {
 	mux := http.NewServeMux()
 
 	// Health endpoint
@@ -191,14 +224,14 @@ func startHTTPServer(dbMonitor *monitor.DatabaseMonitor) {
 	})
 
 	server := &http.Server{
-		Addr:         ":8080",
+		Addr:         address,
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Println("Starting HTTP server on :8080...")
+	log.Printf("Starting HTTP server on %s...", address)
 	log.Println("Available endpoints:")
 	log.Println("  GET  /health      - Database health check")
 	log.Println("  GET  /stats       - Last session statistics")

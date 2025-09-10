@@ -17,7 +17,7 @@ type Connection struct {
 }
 
 type StatsProvider interface {
-	GetSessionStats(ctx context.Context, db *sql.DB) (*SessionStats, error)
+	GetSessionStats(ctx context.Context, db *sql.DB, queryTimeout int) (*SessionStats, error)
 }
 
 type SessionStats struct {
@@ -96,7 +96,7 @@ func (c *Connection) GetSessionStats(ctx context.Context) (*SessionStats, error)
 		return nil, fmt.Errorf("database connection unhealthy for %s: %w", c.config.Name, err)
 	}
 
-	stats, err := c.stats.GetSessionStats(ctx, c.db)
+	stats, err := c.stats.GetSessionStats(ctx, c.db, c.config.QueryTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session stats for %s: %w", c.config.Name, err)
 	}

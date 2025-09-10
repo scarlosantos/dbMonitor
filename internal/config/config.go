@@ -8,10 +8,12 @@ import (
 )
 
 type Config struct {
-	Databases  []DatabaseConfig `yaml:"databases"`
-	Email      EmailConfig      `yaml:"email"`
-	Thresholds ThresholdConfig  `yaml:"thresholds"`
-	Pool       PoolConfig       `yaml:"pool"`
+	Databases   []DatabaseConfig  `yaml:"databases"`
+	Email       EmailConfig       `yaml:"email"`
+	Slack       SlackConfig       `yaml:"slack"`
+	Thresholds  ThresholdConfig   `yaml:"thresholds"`
+	Pool        PoolConfig        `yaml:"pool"`
+	Application ApplicationConfig `yaml:"application"`
 }
 
 type DatabaseConfig struct {
@@ -38,6 +40,10 @@ type EmailConfig struct {
 	UseTLS    bool     `yaml:"use_tls"`
 }
 
+type SlackConfig struct {
+	WebhookURL string `yaml:"webhook_url"`
+}
+
 type ThresholdConfig struct {
 	ActiveConnections   int `yaml:"active_connections"`
 	InactiveConnections int `yaml:"inactive_connections"`
@@ -52,6 +58,14 @@ type PoolConfig struct {
 	HealthCheckInterval int `yaml:"health_check_interval"`
 	BackoffInitial      int `yaml:"backoff_initial"`
 	BackoffMax          int `yaml:"backoff_max"`
+}
+
+type ApplicationConfig struct {
+	MonitoringInterval  int    `yaml:"monitoring_interval"`
+	HealthCheckInterval int    `yaml:"health_check_interval"`
+	AlertResetInterval  int    `yaml:"alert_reset_interval"`
+	AlertFrequency      int    `yaml:"alert_frequency"`
+	HTTPServerAddress   string `yaml:"http_server_address"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -91,6 +105,10 @@ func (c *Config) validate() error {
 
 	if c.Email.SMTPHost == "" || c.Email.FromEmail == "" || len(c.Email.ToEmails) == 0 {
 		return fmt.Errorf("configuração de email incompleta")
+	}
+
+	if c.Application.MonitoringInterval == 0 || c.Application.HealthCheckInterval == 0 || c.Application.AlertResetInterval == 0 || c.Application.AlertFrequency == 0 {
+		return fmt.Errorf("configurações de aplicação incompletas")
 	}
 
 	return nil

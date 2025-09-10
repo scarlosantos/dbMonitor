@@ -55,17 +55,19 @@ func (dm *DatabaseMonitor) CheckAllInstances(ctx context.Context) error {
 	for _, dbConfig := range dm.config.Databases {
 		cfg := dbConfig // Captura a variável de loop para a goroutine
 		g.Go(func() error {
-			if err := dm.checkInstance(ctx, cfg); err != nil {
+			err := dm.checkInstance(ctx, cfg)
+			if err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("failed to check %s: %w", cfg.Name, err))
 				mu.Unlock()
-				return err
 			}
-			return nil
+			return err
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	g.Wait()
+
+	if len(errors) > 0 {
 		log.Printf("Encountered %d errors during instance checks", len(errors))
 		for _, err := range errors {
 			log.Printf("Instance check error: %v", err)
@@ -168,8 +170,9 @@ func (dm *DatabaseMonitor) shouldSendAlert(databaseName, alertType string) bool 
 
 	key := fmt.Sprintf("%s_%s", databaseName, alertType)
 	count := dm.alertCounts[key]
+	frequency := dm.config.Application.AlertFrequency
 
-	if count == 0 || count%10 == 0 {
+	if count == 0 || (frequency > 0 && count%frequency == 0) {
 		dm.alertCounts[key] = count + 1
 		return true
 	}

@@ -21,7 +21,7 @@ func NewMySQLStatsProvider() *MySQLStatsProvider {
 	return &MySQLStatsProvider{}
 }
 
-func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*SessionStats, error) {
+func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB, queryTimeout int) (*SessionStats, error) {
 	query := `
 		SELECT 
 			COALESCE(SUM(CASE WHEN command = 'Sleep' THEN 1 ELSE 0 END), 0) as idle,
@@ -32,7 +32,7 @@ func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*
 		WHERE id != CONNECTION_ID()
 	`
 
-	queryCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.QueryTimeout)*time.Second)
+	queryCtx, cancel := context.WithTimeout(ctx, time.Duration(queryTimeout)*time.Second)
 	defer cancel()
 
 	var stats SessionStats
