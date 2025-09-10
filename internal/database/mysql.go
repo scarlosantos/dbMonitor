@@ -2,8 +2,12 @@ package database
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"dbMonitor/internal/config"
@@ -50,18 +54,44 @@ func (m *MySQLStatsProvider) GetSessionStats(ctx context.Context, db *sql.DB) (*
 }
 
 func connectMySQL(cfg config.DatabaseConfig) (*sql.DB, error) {
+	var tlsConfig *mysql.TLSConfig
+	var err error
+
 	if cfg.CertPath != "" {
-		tlsConfig, err := loadTLSConfig(cfg.CertPath)
+		tlsConfig, err = loadMySQLTLSConfig(cfg.CertPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to configure TLS: %w", err)
+			return nil, fmt.Errorf("failed to load MySQL TLS config: %w", err)
 		}
-		mysql.RegisterTLSConfig("custom", tlsConfig)
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?tls=%s&timeout=%ds&readTimeout=%ds&writeTimeout=%ds&parseTime=true",
-		cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database,
-		getMySQLTLSMode(cfg.SSLMode, cfg.CertPath),
-		cfg.ConnectTimeout, cfg.QueryTimeout, cfg.QueryTimeout)
+	mysqlCfg := mysql.NewConfig()
+	mysqlCfg.User = cfg.Username
+	mysqlCfg.Passwd = cfg.Password
+	mysqlCfg.Net = "tcp"
+	mysqlCfg.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	mysqlCfg.DBName = cfg.Database
+	mysqlCfg.Timeout = time.Duration(cfg.ConnectTimeout) * time.Second
+	mysqlCfg.ReadTimeout = time.Duration(cfg.QueryTimeout) * time.Second
+	mysqlCfg.WriteTimeout = time.Duration(cfg.QueryTimeout) * time.Second
+	mysqlCfg.ParseTime = true
+
+	switch cfg.SSLMode {
+	case "REQUIRED", "require":
+		mysqlCfg.TLSConfig = "true"
+	case "DISABLED", "disable":
+		mysqlCfg.TLSConfig = "false"
+	case "PREFERRED", "preferred":
+		mysqlCfg.TLSConfig = "preferred"
+	default:
+		mysqlCfg.TLSConfig = "preferred"
+	}
+
+	if tlsConfig != nil {
+		mysqlCfg.TLSConfig = "custom"
+		mysqlCfg.TLS = tlsConfig
+	}
+
+	dsn := mysqlCfg.FormatDSN()
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -79,19 +109,31 @@ func connectMySQL(cfg config.DatabaseConfig) (*sql.DB, error) {
 	return db, nil
 }
 
-func getMySQLTLSMode(sslMode, certPath string) string {
-	if certPath != "" {
-		return "custom"
+func loadMySQLTLSConfig(certPath string) (*mysql.TLSConfig, error) {
+	if err := validateTLSCertFiles(certPath); err != nil {
+		return nil, fmt.Errorf("certificate validation failed: %w", err)
 	}
 
-	switch sslMode {
-	case "REQUIRED", "require":
-		return "true"
-	case "DISABLED", "disable":
-		return "false"
-	case "PREFERRED", "preferred":
-		return "preferred"
-	default:
-		return "preferred"
+	cert, err := tls.LoadX509KeyPair(
+		filepath.Join(certPath, "client-cert.pem"),
+		filepath.Join(certPath, "client-key.pem"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client key pair: %w", err)
 	}
+
+	caCert, err := os.ReadFile(filepath.Join(certPath, "ca-cert.pem"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA cert file: %w", err)
+	}
+
+	rootCertPool := x509.NewCertPool()
+	if ok := rootCertPool.AppendCertsFromPEM(caCert); !ok {
+		return nil, fmt.Errorf("failed to append CA cert")
+	}
+
+	return &mysql.TLSConfig{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      rootCertPool,
+	}, nil
 }

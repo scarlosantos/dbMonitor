@@ -8,20 +8,34 @@ import (
 	"path/filepath"
 )
 
+func validateTLSCertFiles(certPath string) error {
+	files := map[string]string{
+		"client certificate": filepath.Join(certPath, "client-cert.pem"),
+		"client key":         filepath.Join(certPath, "client-key.pem"),
+		"CA certificate":     filepath.Join(certPath, "ca-cert.pem"),
+	}
+
+	for fileType, filePath := range files {
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			return fmt.Errorf("%s file not found: %s", fileType, filePath)
+		}
+
+		if _, err := os.Open(filePath); err != nil {
+			return fmt.Errorf("cannot read %s file %s: %w", fileType, filePath, err)
+		}
+	}
+
+	return nil
+}
+
 func loadTLSConfig(certPath string) (*tls.Config, error) {
+	if err := validateTLSCertFiles(certPath); err != nil {
+		return nil, fmt.Errorf("certificate validation failed: %w", err)
+	}
+
 	certFile := filepath.Join(certPath, "client-cert.pem")
 	keyFile := filepath.Join(certPath, "client-key.pem")
 	caFile := filepath.Join(certPath, "ca-cert.pem")
-
-	if _, err := os.Stat(certFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("client certificate file not found: %s", certFile)
-	}
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("client key file not found: %s", keyFile)
-	}
-	if _, err := os.Stat(caFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("CA certificate file not found: %s", caFile)
-	}
 
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {

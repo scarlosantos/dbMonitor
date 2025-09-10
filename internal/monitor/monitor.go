@@ -10,6 +10,7 @@ import (
 	"dbMonitor/internal/config"
 	"dbMonitor/internal/database"
 	"dbMonitor/internal/notifier"
+	"golang.org/x/sync/errgroup"
 )
 
 type DatabaseMonitor struct {
@@ -47,26 +48,24 @@ func NewDatabaseMonitor(cfg *config.Config, notifier notifier.Notifier) *Databas
 }
 
 func (dm *DatabaseMonitor) CheckAllInstances(ctx context.Context) error {
-	var wg sync.WaitGroup
+	var g errgroup.Group
 	var mu sync.Mutex
 	var errors []error
 
 	for _, dbConfig := range dm.config.Databases {
-		wg.Add(1)
-		go func(cfg config.DatabaseConfig) {
-			defer wg.Done()
-
+		cfg := dbConfig // Captura a variável de loop para a goroutine
+		g.Go(func() error {
 			if err := dm.checkInstance(ctx, cfg); err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("failed to check %s: %w", cfg.Name, err))
 				mu.Unlock()
+				return err
 			}
-		}(dbConfig)
+			return nil
+		})
 	}
 
-	wg.Wait()
-
-	if len(errors) > 0 {
+	if err := g.Wait(); err != nil {
 		log.Printf("Encountered %d errors during instance checks", len(errors))
 		for _, err := range errors {
 			log.Printf("Instance check error: %v", err)
@@ -149,14 +148,16 @@ func (dm *DatabaseMonitor) checkThresholds(stats *database.SessionStats) {
 
 	if stats.Total > thresholds.TotalConnections {
 		if dm.shouldSendAlert(alertKey, "HIGH_TOTAL_CONNECTIONS") {
-			dm.sendAlert(Alert{
-				DatabaseName: stats.DatabaseName,
-				AlertType:    "HIGH_TOTAL_CONNECTIONS",
-				Message:      "High total number of connections detected",
-				Value:        stats.Total,
-				Threshold:    thresholds.TotalConnections,
-				Timestamp:    time.Now(),
-			})
+			if dm.shouldSendAlert(alertKey, "HIGH_TOTAL_CONNECTIONS") {
+				dm.sendAlert(Alert{
+					DatabaseName: stats.DatabaseName,
+					AlertType:    "HIGH_TOTAL_CONNECTIONS",
+					Message:      "High total number of connections detected",
+					Value:        stats.Total,
+					Threshold:    thresholds.TotalConnections,
+					Timestamp:    time.Now(),
+				})
+			}
 		}
 	}
 }

@@ -142,7 +142,7 @@ func (p *Pool) getConnectionStats(ctx context.Context, name string, conn *Connec
 		OpenConnections:  dbStats.OpenConnections,
 		IdleConnections:  dbStats.Idle,
 		InUseConnections: dbStats.InUse,
-		MaxConnections:   dbStats.MaxOpenConnections,
+		MaxConnections:   dbStats.MaxOpenConns,
 		TotalQueries:     int64(dbStats.OpenConnections), // Approximation
 		ConnectionStats:  dbStats,
 		LastHealthCheck:  time.Now(),
@@ -187,7 +187,7 @@ func (p *Pool) HealthCheck(ctx context.Context) map[string]error {
 
 			if err != nil {
 				log.Printf("Health check failed for %s: %v", dbName, err)
-				go p.removeConnection(dbName)
+				p.removeConnection(dbName)
 			}
 		}(name, conn)
 	}
